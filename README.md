@@ -31,7 +31,7 @@ pip install ankiazvox
 If you want to contribute or use the latest development version:
 
 ```
-git clone \[https://github.com/ericxu131/ankiazvox.git\](https://github.com/ericxu131/ankiazvox.git)  
+git clone https://github.com/ericxu131/ankiazvox.git
 cd ankiazvox  
 pip install .
 ```
