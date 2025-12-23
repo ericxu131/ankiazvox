@@ -1,7 +1,7 @@
 [project]
 name = "ankiazvox"
 license = {text = "MIT"}
-version = "0.1.0"
+version = "0.2.0"
 description = "A CLI tool to synchronize Anki notes with high-quality Azure TTS audio."
 authors = [
     {name = "Eric Xu",email = "xulihua2006@gmail.com"}
@@ -27,5 +27,5 @@ dev = [
 ]
 
 [project.scripts]
-ankiazvox = "ankiazvox.main:main"
-azv = "ankiazvox.main:main"
+ankiazvox = "ankiazvox.main:cli"
+azv = "ankiazvox.main:cli"

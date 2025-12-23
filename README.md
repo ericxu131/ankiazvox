@@ -7,7 +7,8 @@
 * **Neural TTS**: Uses Azure's state-of-the-art Neural voices for natural, human-like speech.  
 * **Seamless Integration**: Automatically uploads audio to Anki's media folder and updates the \[sound:...\] tags via AnkiConnect.  
 * **Batch Processing**: Efficiently processes multiple notes using a single query.  
-* **Flexible CLI**: Built with Click for a smooth command-line experience and tqdm for real-time progress tracking.  
+* **Flexible CLI**: Built with Click for a smooth command-line experience with support for subcommands.  
+* **Voice Explorer**: Built-in command to list and filter available Azure voices.  
 * **Smart Querying**: Supports the full range of Anki's search syntax.
 
 ## **🚀 Installation**
@@ -21,47 +22,54 @@
 
 The easiest way to get started is to install directly from PyPI:
 
+```
 pip install ankiazvox
+```
 
 ### **3\. Install from Source (For Developers)**
 
 If you want to contribute or use the latest development version:
 
+```
 git clone \[https://github.com/ericxu131/ankiazvox.git\](https://github.com/ericxu131/ankiazvox.git)  
 cd ankiazvox  
 pip install .
+```
 
 ## **⚙️ Configuration**
 
 Create a .env file in your working directory with your credentials:
 
-\# AnkiConnect Settings  
-ANKI\_CONNECT\_URL=\[http://127.0.0.1:8765\](http://127.0.0.1:8765)
+```
+# AnkiConnect Settings  
+ANKI_CONNECT_URL=http://127.0.0.1:8765
 
-\# Azure Speech Settings  
-AZURE\_SPEECH\_KEY=your\_azure\_api\_key  
-AZURE\_SPEECH\_REGION=your\_service\_region (e.g., eastus)
+# Azure Speech Settings  
+AZURE_SPEECH_KEY=your_azure_api_key  
+AZURE_SPEECH_REGION=your_service_region (e.g., eastus)
 
-\# Default Voice Configuration  
-DEFAULT\_VOICE=en-US-AvaMultilingualNeural
+# Default Voice Configuration  
+DEFAULT_VOICE=en-US-AvaMultilingualNeural
+```
+
 
 ## **🛠 Usage**
 
 Once installed, you can use the azv (alias) or ankiazvox command.
 
-### **Basic Sync**
+### **1\. Synchronize Audio (sync)**
 
 Sync notes from a specific deck using default settings:
 
-azv \--query "deck:MyEnglishDeck" \--source "Front" \--target "AudioField"
-
-### **Advanced Usage**
+```
+azv sync --query "deck:MyEnglishDeck" --source "Front" --target "AudioField"
+```
 
 Override the default voice and limit the number of notes for a test run:
 
-azv \-q "tag:new\_words" \-s "Word" \-t "Pronunciation" \-v "zh-CN-YunyangNeural" \--limit 10
-
-### **Options**
+```
+azv sync -q "tag:new_words" -s "Word" -t "Pronunciation" -v "zh-CN-YunyangNeural" --limit 10
+```
 
 | Option | Short | Description |
 | :---- | :---- | :---- |
@@ -71,6 +79,22 @@ azv \-q "tag:new\_words" \-s "Word" \-t "Pronunciation" \-v "zh-CN-YunyangNeural
 | \--voice | \-v | Overrides the default Azure voice defined in .env |
 | \--limit |  | Max number of notes to process in this run |
 | \--temp-dir |  | Custom directory for temporary audio files |
+| \--env |  | Path to a specific .env file |
+
+### **2\. List Voices (list-voices)**
+
+List all available Azure TTS voices:
+
+```
+azv list-voices
+```
+
+Filter voices by locale (e.g., Chinese or British English):
+
+```
+azv list-voices --locale zh-CN  
+azv list-voices -l en-GB
+```
 
 ## **🤝 Contributing**
 
@@ -90,4 +114,4 @@ Distributed under the **MIT License**. See LICENSE for more information.
 
 **Eric Xu** \- [xulihua2006@gmail.com](mailto:xulihua2006@gmail.com)
 
-Project Link: [https://github.com/ericxu131/ankiazvox](https://www.google.com/search?q=https://github.com/ericxu131/ankiazvox)
+Project Link: [https://github.com/ericxu131/ankiazvox](https://github.com/ericxu131/ankiazvox)
