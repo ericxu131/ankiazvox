@@ -5,7 +5,7 @@
 ## **✨ Features**
 
 * **Neural TTS**: Uses Azure's state-of-the-art Neural voices for natural, human-like speech.  
-* **HTML Sanitization**: Automatically strips HTML tags (like \<br/\>, \<div\>) from your Anki fields to ensure clean speech synthesis.  
+* **HTML Sanitization**: Automatically strips HTML tags (like ```<br>, <div>```) from your Anki fields to ensure clean speech synthesis.  
 * **Overwrite Protection**: Smartly skips notes that already have audio to save API quota, with an optional \--overwrite flag.  
 * **Seamless Integration**: Automatically uploads audio to Anki's media folder and updates the \[sound:...\] tags via AnkiConnect.  
 * **Voice Explorer**: Built-in command to list and filter available Azure voices by locale.  
@@ -57,11 +57,15 @@ You can use the azv alias or the full ankiazvox command.
 
 Sync notes from a deck. By default, it **skips** fields that already contain audio data.
 
-azv sync \--query "deck:English" \--source "Front" \--target "Audio"
+```
+azv sync --query "deck:English" --source "Front" --target "Audio"
+```
 
 **Force overwrite** existing audio and limit to 5 notes:
 
-azv sync \-q "tag:review" \-s "Word" \-t "Sound" \--overwrite \--limit 5
+```
+azv sync -q "tag:review" -s "Word" -t "Sound" --overwrite --limit 5
+```
 
 | Option | Short | Description |
 | :---- | :---- | :---- |
