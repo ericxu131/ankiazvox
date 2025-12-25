@@ -177,7 +177,7 @@ def sync(env, query, source, target, voice, temp_dir, limit, overwrite):
             if not clean_text:
                 continue
 
-            file_name = f"tts_{note_id}.mp3"
+            file_name = f"azv_{source}_{note_id}.mp3"
             local_file = audio_path / file_name
 
             if tts.text_to_mp3(clean_text, local_file):
