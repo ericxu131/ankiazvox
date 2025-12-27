@@ -5,12 +5,14 @@
 ## **✨ Features**
 
 * **Neural TTS**: Uses Azure's state-of-the-art Neural voices for natural, human-like speech.  
-* **HTML Sanitization**: Automatically strips HTML tags (like ```<br>, <div>```) from your Anki fields to ensure clean speech synthesis.  
-* **Overwrite Protection**: Smartly skips notes that already have audio to save API quota, with an optional \--overwrite flag.  
-* **Seamless Integration**: Automatically uploads audio to Anki's media folder and updates the \[sound:...\] tags via AnkiConnect.  
-* **Voice Explorer**: Built-in command to list and filter available Azure voices by locale.  
-* **Auto-Cleanup**: Automatically removes temporary audio files after synchronization is complete.  
-* **Flexible CLI**: Built with Click for a smooth command-line experience.
+* **Batch Voice Sampling**: Generate audio samples for a specific voice or an entire locale (e.g., en-US) to find the perfect voice for your deck.  
+* **Flexible Configuration**: Supports both .env files and azv\_config.yaml for easy credential management.  
+* **HTML Sanitization**: Automatically strips HTML tags (like `<br>, <div>`  
+* **Smart Syncing**:  
+  * **Overwrite Protection**: Skips notes that already have audio to save API quota, with an optional `--overwrite` flag.  
+  * **Safety Confirmation**: Includes a summary and confirmation step before starting large batch jobs.  
+* **Seamless Integration**: Automatically uploads audio to Anki's media folder and updates the `[sound:...]` tags via AnkiConnect.  
+* **Auto-Cleanup**: Automatically removes temporary audio files after synchronization is complete.
 
 ## **🚀 Installation**
 
@@ -29,23 +31,29 @@ pip install ankiazvox
 
 ```
 git clone https://github.com/ericxu131/ankiazvox.git
-cd ankiazvox  
+cd ankiazvox    
 pip install .
 ```
 
 ## **⚙️ Configuration**
 
-Create a .env file in your working directory (or specify one via \--env):
+Create an azv\_config.yaml file (recommended) or a .env file in your working directory:
+
+### **YAML Configuration (azv\_config.yaml)**
 
 ```
-# AnkiConnect Settings  
-ANKI_CONNECT_URL=http://127.0.0.1:8765
+AZURE\_SPEECH_KEY: "your_azure_api_key"  
+AZURE_SPEECH_REGION: "westus"  
+DEFAULT_VOICE: "en-US-AvaMultilingualNeural"  
+ANKI_CONNECT_URL: "http://127.0.0.1:8765"
+```
 
-# Azure Speech Settings  
+### **Environment Variables (.env)**
+
+
+```
 AZURE_SPEECH_KEY=your_azure_api_key  
-AZURE_SPEECH_REGION=your_service_region (e.g., eastus)
-
-# Default Voice Configuration  
+AZURE_SPEECH_REGION=westus  
 DEFAULT_VOICE=en-US-AvaMultilingualNeural
 ```
 
@@ -61,25 +69,34 @@ Sync notes from a deck. By default, it **skips** fields that already contain aud
 azv sync --query "deck:English" --source "Front" --target "Audio"
 ```
 
-**Force overwrite** existing audio and limit to 5 notes:
-
-```
-azv sync -q "tag:review" -s "Word" -t "Sound" --overwrite --limit 5
-```
-
 | Option | Short | Description |
 | :---- | :---- | :---- |
 | \--query | \-q | Anki search query (e.g., deck:Default) |
 | \--source | \-s | Field name containing the text to synthesize |
 | \--target | \-t | Field name where the \[sound:...\] tag will be saved |
-| \--overwrite |  | Force update the target field even if it has a value |
 | \--voice | \-v | Override the default Azure voice |
+| \--overwrite |  | Force update the target field even if it has a value |
+| \--yes | \-y | Skip the confirmation prompt |
 | \--limit |  | Max number of notes to process |
-| \--env |  | Path to a specific .env file |
+| \--config |  | Path to a specific config/env file |
 
-### **2\. List Voices (list-voices)**
+### **2\. Sample Voices (sample)**
 
-Explore available neural voices:
+Generate audio samples to compare different voices before syncing:
+
+\# Sample all US English voices to the /samples folder  
+```
+azv sample --locale en-US --text "Hello, how are you?"
+```
+
+\# Sample a specific voice and play it immediately  
+```
+azv sample --voice en-US-AndrewNeural --play
+```
+
+### **3\. List Voices (list-voices)**
+
+Explore available neural voices in the terminal:
 
 ```
 azv list-voices --locale zh-CN

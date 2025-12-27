@@ -1,5 +1,7 @@
 .DS_Store
 .env
+azv_config.yml
+azv_config.yaml
 dist
 __pycache__
 .vscode
