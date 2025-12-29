@@ -38,15 +38,14 @@ class AnkiClient:
             return data.get("result")
         except Exception as e:
             click.secho(
-                f"Error: Unable to connect to Anki. Please ensure Anki is running "
-                f"and the AnkiConnect plugin is installed. ({e})",
+                f"Error: Unable to connect to Anki. ({e})",
                 fg="red",
             )
             return None
 
 
 class AzureTTSManager:
-    """Wrapper for Azure Cognitive Services Speech Synthesis."""
+    """Wrapper for Azure Cognitive Services Speech Synthesis with SSML support."""
 
     def __init__(self, key: str, region: str, voice: Optional[str] = None):
         self.speech_config = speechsdk.SpeechConfig(subscription=key, region=region)
@@ -58,13 +57,18 @@ class AzureTTSManager:
             speechsdk.SpeechSynthesisOutputFormat.Audio16Khz32KBitRateMonoMp3
         )
 
-    def text_to_mp3(self, text: str, save_path: Path) -> bool:
-        """Synthesize text and save it as an MP3 file."""
+    def speak(self, content: str, save_path: Path) -> bool:
+        """Synthesize content (SSML or text) and save to MP3."""
         audio_config = speechsdk.audio.AudioOutputConfig(filename=str(save_path))
         synthesizer = speechsdk.SpeechSynthesizer(
             speech_config=self.speech_config, audio_config=audio_config
         )
-        result = synthesizer.speak_text_async(text).get()
+        
+        if content.strip().startswith("<speak"):
+            result = synthesizer.speak_ssml_async(content).get()
+        else:
+            result = synthesizer.speak_text_async(content).get()
+            
         return result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted
 
     def get_voice_list(self, locale: Optional[str] = None) -> List[Any]:
@@ -84,16 +88,38 @@ class AzureTTSManager:
             for v in voices:
                 gender = "Female" if v.gender == speechsdk.SynthesisVoiceGender.Female else "Male"
                 click.echo(f"{v.short_name:<40} | {gender:<10} | {v.locale:<10}")
-        else:
-            click.secho("Error: Failed to retrieve voices list.", fg="red")
 
+
+# --- Utilities ---
+
+def wrap_ssml(text: str, voice: str, rate: str = "1.0", pitch: str = "0%") -> str:
+    """
+    Wraps plain text in an SSML envelope with prosody controls.
+    Converts <br> tags into SSML break elements for natural pauses.
+    """
+    # Replace <br> or <br/> with a 400ms pause
+    ssml_text = text.replace("<br>", '<break time="400ms"/>').replace("<br/>", '<break time="400ms"/>')
+    
+    return f"""
+    <speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>
+        <voice name='{voice}'>
+            <prosody rate='{rate}' pitch='{pitch}'>
+                {ssml_text}
+            </prosody>
+        </voice>
+    </speak>
+    """
 
 def clean_html(raw_html: str) -> str:
-    """Remove HTML tags and convert entities to plain text for TTS."""
-    if not raw_html:
-        return ""
+    """Remove HTML tags except <br> and convert entities to plain text for TTS processing."""
+    if not raw_html: return ""
+    
     soup = BeautifulSoup(raw_html, "html.parser")
-    return soup.get_text(separator=" ", strip=True)
+    for tag in soup.find_all(True):
+        if tag.name != 'br':
+            tag.unwrap()
+            
+    return str(soup)
 
 def load_config(config_path: Optional[str] = None) -> Dict[str, str]:
     """Load configuration from YAML or .env file."""
@@ -103,50 +129,44 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, str]:
         "AZURE_SPEECH_REGION": "",
         "DEFAULT_VOICE": ""
     }
-
-    if config_path:
-        target_path = Path(config_path)
-    else:
-        target_path = Path.cwd() / DEFAULT_CONFIG_FILENAME
-        if not target_path.exists():
-            alt_yml = Path.cwd() / "azv_config.yml"
-            if alt_yml.exists():
-                target_path = alt_yml
-            else:
-                target_path = Path.cwd() / ".env"
+    target_path = Path(config_path) if config_path else Path.cwd() / DEFAULT_CONFIG_FILENAME
+    
+    if not target_path.exists() and not config_path:
+        for alt in ["azv_config.yml", ".env"]:
+            if (Path.cwd() / alt).exists():
+                target_path = Path.cwd() / alt
+                break
 
     if target_path.exists():
         if target_path.suffix.lower() in [".yaml", ".yml"]:
-            try:
-                with open(target_path, "r", encoding="utf-8") as f:
-                    yaml_data = yaml.safe_load(f)
-                    if isinstance(yaml_data, dict):
-                        config.update(yaml_data)
-                    return config
-            except Exception as e:
-                click.secho(f"Warning: Failed to parse YAML at {target_path}: {e}", fg="yellow")
-        
+            with open(target_path, "r", encoding="utf-8") as f:
+                yaml_data = yaml.safe_load(f)
+                if yaml_data: config.update(yaml_data)
         elif target_path.name == ".env" or target_path.suffix == "":
             load_dotenv(dotenv_path=target_path)
             config["ANKI_CONNECT_URL"] = os.getenv("ANKI_CONNECT_URL", config["ANKI_CONNECT_URL"])
             config["AZURE_SPEECH_KEY"] = os.getenv("AZURE_SPEECH_KEY", "")
             config["AZURE_SPEECH_REGION"] = os.getenv("AZURE_SPEECH_REGION", "")
             config["DEFAULT_VOICE"] = os.getenv("DEFAULT_VOICE", "")
-            return config
-
     return config
 
 def play_audio(file_path: Path):
-    """Attempt to play the audio file using system players."""
+    """Play audio file using system player."""
     try:
-        if os.name == 'nt':  # Windows
-            os.startfile(file_path)
-        elif os.uname().sysname == 'Darwin':  # macOS
-            subprocess.run(['afplay', str(file_path)], check=True)
-        else:  # Linux/others
-            subprocess.run(['ffplay', '-nodisp', '-autoexit', str(file_path)], check=True)
-    except Exception:
-        pass
+        if os.name == 'nt': os.startfile(file_path)
+        elif os.uname().sysname == 'Darwin': subprocess.run(['afplay', str(file_path)], check=True)
+        else: subprocess.run(['ffplay', '-nodisp', '-autoexit', str(file_path)], check=True)
+    except Exception: pass
+
+def parse_field_mapping(mapping_str: str) -> Dict[str, str]:
+    """Parses 's1:t1;s2:t2' into {'s1': 't1', 's2': 't2'}."""
+    mapping = {}
+    parts = mapping_str.split(";")
+    for part in parts:
+        if ":" in part:
+            s, t = part.split(":", 1)
+            mapping[s.strip()] = t.strip()
+    return mapping
 
 # --- CLI Command Group ---
 
@@ -156,143 +176,159 @@ def cli():
     pass
 
 @cli.command()
+def init():
+    """Interactively initialize the azv_config.yaml file."""
+    config_path = Path.cwd() / DEFAULT_CONFIG_FILENAME
+    if config_path.exists():
+        if not click.confirm(f"'{DEFAULT_CONFIG_FILENAME}' already exists. Overwrite?"):
+            click.echo("Initialization aborted.")
+            return
+
+    click.secho("--- AnkiVox Configuration Setup ---", fg="cyan", bold=True)
+    
+    key = click.prompt("Enter your Azure Speech Key", type=str)
+    region = click.prompt("Enter your Azure Speech Region (e.g., eastus)", type=str)
+    anki_url = click.prompt("Enter AnkiConnect URL", default="http://127.0.0.1:8765", type=str)
+    
+    click.echo("\nPopular Voices:")
+    click.echo("1. en-US-AndrewNeural (Male, English)")
+    click.echo("2. en-US-AvaNeural (Female, English)")
+    click.echo("3. zh-CN-XiaoxiaoNeural (Female, Chinese)")
+    click.echo("4. Custom / Skip")
+    
+    voice_choice = click.prompt("Select a default voice", default="4", type=str)
+    
+    default_voice = ""
+    if voice_choice == "1": default_voice = "en-US-AndrewNeural"
+    elif voice_choice == "2": default_voice = "en-US-AvaNeural"
+    elif voice_choice == "3": default_voice = "zh-CN-XiaoxiaoNeural"
+    else:
+        default_voice = click.prompt("Enter custom voice name (or leave empty)", default="", show_default=False)
+
+    config_data = {
+        "AZURE_SPEECH_KEY": key.strip(),
+        "AZURE_SPEECH_REGION": region.strip(),
+        "ANKI_CONNECT_URL": anki_url.strip(),
+        "DEFAULT_VOICE": default_voice.strip()
+    }
+
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
+    
+    click.secho(f"\nSuccess! Configuration saved to {DEFAULT_CONFIG_FILENAME}", fg="green")
+    click.echo("You can now run 'azv list-voices' to verify your connection.")
+
+@cli.command()
 @click.option("--config", type=click.Path(exists=True), help="Path to config file")
-@click.option("--voice", "-v", help="Specific Azure voice name to sample")
-@click.option("--locale", "-l", help="Sample all voices in a specific locale (e.g., en-US)")
-@click.option("--text", "-t", default="Hello, this is a sample of the selected voice.", help="Text to synthesize")
-@click.option("--out-dir", "-o", default="samples", help="Directory to save samples")
-@click.option("--play", is_flag=True, default=False, help="Play audio (only works for single voice mode)")
-def sample(config, voice, locale, text, out_dir, play):
-    """Generate sample audio files for specific voices or entire locales."""
+@click.option("--voice", "-v", help="Specific Azure voice name")
+@click.option("--locale", "-l", help="Sample all voices in a specific locale")
+@click.option("--text", "-t", default="Sample text.", help="Text to synthesize")
+@click.option("--rate", default="1.0", help="Speech rate (e.g., 0.8)")
+@click.option("--pitch", default="0%", help="Pitch (e.g., +10%)")
+@click.option("--out-dir", "-o", default="samples", help="Output directory")
+@click.option("--play", is_flag=True, default=False, help="Play audio immediately")
+def sample(config, voice, locale, text, rate, pitch, out_dir, play):
+    """Generate sample audio files with SSML support."""
     if not voice and not locale:
-        click.secho("Error: You must provide either --voice or --locale.", fg="red")
+        click.secho("Error: Provide either --voice or --locale.", fg="red")
         return
-
     cfg = load_config(config)
-    tts_key = cfg.get("AZURE_SPEECH_KEY")
-    tts_region = cfg.get("AZURE_SPEECH_REGION")
-
-    if not tts_key or not tts_region:
-        click.secho("Error: Missing Azure credentials.", fg="red")
-        return
-
+    tts = AzureTTSManager(cfg.get("AZURE_SPEECH_KEY"), cfg.get("AZURE_SPEECH_REGION"))
     out_path = Path(out_dir)
     out_path.mkdir(exist_ok=True)
     
-    tts_manager = AzureTTSManager(tts_key, tts_region)
-
-    voices_to_sample = []
-    if voice:
-        voices_to_sample.append(voice)
-    else:
-        click.echo(f"Fetching voice list for locale '{locale}'...")
-        list_res = tts_manager.get_voice_list(locale)
-        voices_to_sample = [v.short_name for v in list_res]
-
-    if not voices_to_sample:
-        click.secho("No voices found to sample.", fg="yellow")
-        return
-
-    click.echo(f"Generating {len(voices_to_sample)} samples in '{out_dir}'...")
-    
-    for v_name in tqdm(voices_to_sample, desc="Generating Samples"):
+    voices = [voice] if voice else [v.short_name for v in tts.get_voice_list(locale)]
+    click.echo(f"Generating {len(voices)} samples...")
+    for v_name in tqdm(voices):
         file_path = out_path / f"{v_name}.mp3"
-        tts_manager.speech_config.speech_synthesis_voice_name = v_name
-        if tts_manager.text_to_mp3(text, file_path):
-            if play and len(voices_to_sample) == 1:
-                play_audio(file_path)
-        else:
-            click.secho(f"Failed to generate for {v_name}", fg="yellow")
-
-    click.secho(f"\nDone! Samples are available in the '{out_dir}/' folder.", fg="green")
-
+        tts.speech_config.speech_synthesis_voice_name = v_name
+        content = wrap_ssml(text, v_name, rate=rate, pitch=pitch) if (rate != "1.0" or pitch != "0%") else text
+        if tts.speak(content, file_path) and play and len(voices) == 1:
+            play_audio(file_path)
 
 @cli.command()
-@click.option("--config", type=click.Path(exists=True), help="Path to azv_config.yaml or .env file")
-@click.option("--locale", "-l", help="Filter voices by locale (e.g., en-US, zh-CN)")
-def list_voices(config, locale):
-    """List all available Azure TTS voices."""
+@click.option("--config", type=click.Path(exists=True), help="Path to config")
+@click.option("--query", "-q", required=True, help='Anki query, e.g., "deck:Default"')
+@click.option("--source", "-s", help="Source field")
+@click.option("--target", "-t", help="Target field")
+@click.option("--fields", "-f", help="Field mapping e.g., 'Front:Audio;Back:BackAudio'")
+@click.option("--voice", "-v", help="Azure voice name")
+@click.option("--rate", default="1.0", help="Speech rate")
+@click.option("--pitch", default="0%", help="Pitch adjustment")
+@click.option("--overwrite", is_flag=True, default=False, help="Overwrite existing audio")
+@click.option("--yes", "-y", is_flag=True, default=False, help="Skip confirmation")
+def sync(config, query, source, target, fields, voice, rate, pitch, overwrite, yes):
+    """Sync Anki notes with multi-field mapping and SSML support."""
     cfg = load_config(config)
-    tts_key = cfg.get("AZURE_SPEECH_KEY")
-    tts_region = cfg.get("AZURE_SPEECH_REGION")
-
-    if not tts_key or not tts_region:
-        click.secho(f"Error: Credentials missing.", fg="red")
+    anki = AnkiClient(cfg.get("ANKI_CONNECT_URL"))
+    
+    field_map = parse_field_mapping(fields) if fields else {}
+    if source and target:
+        field_map[source] = target
+    
+    if not field_map:
+        click.secho("Error: Must provide --source/--target or --fields.", fg="red")
         return
 
-    tts = AzureTTSManager(tts_key, tts_region)
-    tts.list_voices(locale)
-
-
-@cli.command()
-@click.option("--config", type=click.Path(exists=True), help="Path to config file")
-@click.option("--query", "-q", required=True, help='Anki query string, e.g., "deck:Default"')
-@click.option("--source", "-s", required=True, help="Source text field name")
-@click.option("--target", "-t", required=True, help="Target audio field name")
-@click.option("--voice", "-v", help="Azure voice name (overrides config)")
-@click.option("--temp-dir", default="temp_audios", help="Directory for temporary audio files")
-@click.option("--limit", type=int, help="Limit the number of notes to process")
-@click.option("--overwrite", is_flag=True, default=False, help="Overwrite target field if not empty")
-@click.option("--yes", "-y", is_flag=True, default=False, help="Skip confirmation prompt")
-def sync(config, query, source, target, voice, temp_dir, limit, overwrite, yes):
-    """Sync Anki notes and generate Azure TTS audio."""
-    cfg = load_config(config)
-
-    anki_url = cfg.get("ANKI_CONNECT_URL")
-    tts_key = cfg.get("AZURE_SPEECH_KEY")
-    tts_region = cfg.get("AZURE_SPEECH_REGION")
+    tts_key, tts_region = cfg.get("AZURE_SPEECH_KEY"), cfg.get("AZURE_SPEECH_REGION")
     default_voice = voice or cfg.get("DEFAULT_VOICE")
-
     if not tts_key or not tts_region:
-        click.secho(f"Error: Missing Azure credentials.", fg="red")
+        click.secho("Error: Missing Azure credentials. Run 'azv init' to set them up.", fg="red")
         return
 
-    anki = AnkiClient(anki_url)
     tts = AzureTTSManager(tts_key, tts_region, default_voice)
-    audio_path = Path(temp_dir)
-
+    temp_path = Path("temp_audios")
+    
     try:
-        click.echo(f"Searching notes: {query}...")
+        click.echo(f"Searching: {query}...")
         note_ids = anki.invoke("findNotes", query=query)
-        if not note_ids:
-            click.echo("No matching notes found.")
-            return
-
-        if limit: note_ids = note_ids[:limit]
+        if not note_ids: return
         notes_data = anki.invoke("notesInfo", notes=note_ids)
         
-        eligible_notes = []
+        tasks = []
         for note in notes_data:
-            fields = note.get("fields", {})
-            if source not in fields or target not in fields: continue
-            if fields.get(target, {}).get("value", "").strip() and not overwrite: continue
-            
-            clean_text = clean_html(fields.get(source, {}).get("value", ""))
-            if clean_text: eligible_notes.append((note["noteId"], clean_text))
+            note_fields = note.get("fields", {})
+            for src, tgt in field_map.items():
+                if src in note_fields and tgt in note_fields:
+                    val = note_fields.get(tgt, {}).get("value", "").strip()
+                    if val and not overwrite: continue
+                    txt = clean_html(note_fields.get(src, {}).get("value", ""))
+                    if txt: tasks.append((note["noteId"], src, tgt, txt))
 
-        if not eligible_notes:
-            click.secho("No notes require synchronization.", fg="yellow")
+        if not tasks:
+            click.secho("No notes require sync.", fg="yellow")
             return
 
-        if not yes:
-            if not click.confirm(f"Proceed syncing {len(eligible_notes)} notes?"): return
+        click.secho(f"Sync Preview: {len(tasks)} audio files to generate.", fg="cyan", bold=True)
+        if not yes and not click.confirm("Proceed?"): return
 
-        audio_path.mkdir(exist_ok=True)
-        for note_id, clean_text in tqdm(eligible_notes, desc="Syncing"):
-            file_name = f"azv_{source}_{note_id}.mp3"
-            local_file = audio_path / file_name
-            if tts.text_to_mp3(clean_text, local_file):
-                with open(local_file, "rb") as f:
-                    b64_data = base64.b64encode(f.read()).decode("utf-8")
-                anki.invoke("storeMediaFile", filename=file_name, data=b64_data)
-                anki.invoke("updateNoteFields", note={"id": note_id, "fields": {target: f"[sound:{file_name}]"}})
+        temp_path.mkdir(exist_ok=True)
+        for nid, s_fld, t_fld, txt in tqdm(tasks, desc="Syncing"):
+            fname = f"azv_{s_fld}_{nid}.mp3"
+            l_file = temp_path / fname
+            if "<br" in txt or rate != "1.0" or pitch != "0%":
+                input_content = wrap_ssml(txt, default_voice, rate=rate, pitch=pitch)
+            else:
+                input_content = txt
+            
+            if tts.speak(input_content, l_file):
+                with open(l_file, "rb") as f:
+                    b64 = base64.b64encode(f.read()).decode("utf-8")
+                anki.invoke("storeMediaFile", filename=fname, data=b64)
+                anki.invoke("updateNoteFields", note={"id": nid, "fields": {t_fld: f"[sound:{fname}]"}})
                 time.sleep(0.05)
-
-        click.secho(f"\nCompleted!", fg="green")
-    
+        click.secho(f"Done! {len(tasks)} files synced.", fg="green")
     finally:
-        if audio_path.exists(): shutil.rmtree(audio_path)
+        if temp_path.exists(): shutil.rmtree(temp_path)
 
+@cli.command()
+@click.option("--config", type=click.Path(exists=True), help="Path to config")
+@click.option("--locale", "-l", help="Locale filter")
+def list_voices(config, locale):
+    """List available Azure TTS voices."""
+    cfg = load_config(config)
+    tts = AzureTTSManager(cfg.get("AZURE_SPEECH_KEY"), cfg.get("AZURE_SPEECH_REGION"))
+    tts.list_voices(locale)
 
 if __name__ == "__main__":
     cli()
