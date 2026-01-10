@@ -4,9 +4,11 @@ import time
 import shutil
 import yaml
 import subprocess
-from typing import Any, Optional, Dict, List
+import random
+from typing import Any, Optional, Dict, List, Tuple
 from pathlib import Path
 from dotenv import load_dotenv
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 import azure.cognitiveservices.speech as speechsdk
@@ -16,6 +18,7 @@ from bs4 import BeautifulSoup
 
 # --- Constants ---
 DEFAULT_CONFIG_FILENAME = "azv_config.yaml"
+MAX_RETRIES = 5
 
 # --- Core Logic Classes ---
 
@@ -48,32 +51,63 @@ class AzureTTSManager:
     """Wrapper for Azure Cognitive Services Speech Synthesis with SSML support."""
 
     def __init__(self, key: str, region: str, voice: Optional[str] = None):
-        self.speech_config = speechsdk.SpeechConfig(subscription=key, region=region)
-        if voice:
-            self.speech_config.speech_synthesis_voice_name = voice
-        
-        # Set output format to MP3
-        self.speech_config.set_speech_synthesis_output_format(
+        self.key = key
+        self.region = region
+        self.voice = voice
+
+    def _get_config(self) -> speechsdk.SpeechConfig:
+        """Create fresh config for thread safety."""
+        config = speechsdk.SpeechConfig(subscription=self.key, region=self.region)
+        if self.voice:
+            config.speech_synthesis_voice_name = self.voice
+        config.set_speech_synthesis_output_format(
             speechsdk.SpeechSynthesisOutputFormat.Audio16Khz32KBitRateMonoMp3
         )
+        return config
 
-    def speak(self, content: str, save_path: Path) -> bool:
-        """Synthesize content (SSML or text) and save to MP3."""
+    def speak(self, content: str, save_path: Path, debug: bool = False) -> bool:
+        """Synthesize content with exponential backoff for rate limits."""
+        config = self._get_config()
         audio_config = speechsdk.audio.AudioOutputConfig(filename=str(save_path))
-        synthesizer = speechsdk.SpeechSynthesizer(
-            speech_config=self.speech_config, audio_config=audio_config
-        )
         
-        if content.strip().startswith("<speak"):
-            result = synthesizer.speak_ssml_async(content).get()
-        else:
-            result = synthesizer.speak_text_async(content).get()
+        for attempt in range(MAX_RETRIES):
+            synthesizer = speechsdk.SpeechSynthesizer(
+                speech_config=config, audio_config=audio_config
+            )
             
-        return result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted
+            if content.strip().startswith("<speak"):
+                result = synthesizer.speak_ssml_async(content).get()
+                
+            else:
+                result = synthesizer.speak_text_async(content).get()
+            
+            if debug:
+                click.secho(f"[DEBUG] Azure TTS Result: reason={result.reason}", fg="cyan")
+                
+            if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+                if debug:
+                    click.secho(f"[DEBUG] Audio synthesis successful, saved to {save_path}", fg="green")
+                return True
+            
+            # Handle Throttling (429)
+            if result.reason == speechsdk.ResultReason.Canceled:
+                details = result.cancellation_details
+                if debug:
+                    click.secho(f"[DEBUG] Synthesis canceled: {details.error_details}", fg="yellow")
+                if "429" in details.error_details or "Too Many Requests" in details.error_details:
+                    wait = (2 ** attempt) + random.random()
+                    if debug:
+                        click.secho(f"[DEBUG] Rate limited (429), retrying in {wait:.2f}s (attempt {attempt + 1}/{MAX_RETRIES})", fg="yellow")
+                    time.sleep(wait)
+                    continue
+            
+            return False
+        return False
 
     def get_voice_list(self, locale: Optional[str] = None) -> List[Any]:
         """Fetch list of available voices from Azure."""
-        synthesizer = speechsdk.SpeechSynthesizer(speech_config=self.speech_config, audio_config=None)
+        config = self._get_config()
+        synthesizer = speechsdk.SpeechSynthesizer(speech_config=config, audio_config=None)
         result = synthesizer.get_voices_async(locale if locale else "").get()
         if result.reason == speechsdk.ResultReason.VoicesListRetrieved:
             return sorted(result.voices, key=lambda x: x.short_name)
@@ -96,12 +130,15 @@ def wrap_ssml(text: str, voice: str, rate: str = "1.0", pitch: str = "0%") -> st
     """
     Wraps plain text in an SSML envelope with prosody controls.
     Converts <br> tags into SSML break elements for natural pauses.
+    Extracts language code from voice name (e.g., 'en-US' from 'en-US-AndrewNeural').
     """
+    # Extract language code from voice name (e.g., 'en-US' from 'en-US-AndrewNeural')
+    lang_code = "-".join(voice.split("-")[:2]) if "-" in voice else "en-US"
+    
     # Replace <br> or <br/> with a 400ms pause
     ssml_text = text.replace("<br>", '<break time="400ms"/>').replace("<br/>", '<break time="400ms"/>')
-    
     return f"""
-    <speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>
+    <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="{lang_code}">
         <voice name='{voice}'>
             <prosody rate='{rate}' pitch='{pitch}'>
                 {ssml_text}
@@ -113,12 +150,10 @@ def wrap_ssml(text: str, voice: str, rate: str = "1.0", pitch: str = "0%") -> st
 def clean_html(raw_html: str) -> str:
     """Remove HTML tags except <br> and convert entities to plain text for TTS processing."""
     if not raw_html: return ""
-    
     soup = BeautifulSoup(raw_html, "html.parser")
     for tag in soup.find_all(True):
         if tag.name != 'br':
             tag.unwrap()
-            
     return str(soup)
 
 def load_config(config_path: Optional[str] = None) -> Dict[str, str]:
@@ -168,6 +203,43 @@ def parse_field_mapping(mapping_str: str) -> Dict[str, str]:
             mapping[s.strip()] = t.strip()
     return mapping
 
+def process_single_task(task: Tuple, tts: AzureTTSManager, anki: AnkiClient, 
+                        temp_path: Path, voice: str, rate: str, pitch: str, ssml_source: bool = False, debug: bool = False) -> bool:
+    """Worker function for threading."""
+    nid, s_fld, t_fld, txt = task
+    fname = f"azv_{s_fld}_{nid}.mp3"
+    l_file = temp_path / fname
+    
+    if debug:
+        click.secho(f"[DEBUG] Processing note {nid}: {s_fld} -> {t_fld}", fg="cyan")
+    
+    # If source is already SSML, use it directly; otherwise wrap it
+    if ssml_source:
+        input_content = txt
+    else:
+        input_content = wrap_ssml(txt, voice, rate=rate, pitch=pitch) if ("<br" in txt or rate != "1.0" or pitch != "0%") else txt
+    
+    if debug:
+        click.secho(f"[DEBUG] Generated content length: {len(input_content)} chars", fg="cyan")
+    
+    if tts.speak(input_content, l_file, debug=debug):
+        try:
+            with open(l_file, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("utf-8")
+            anki.invoke("storeMediaFile", filename=fname, data=b64)
+            anki.invoke("updateNoteFields", note={"id": nid, "fields": {t_fld: f"[sound:{fname}]"}})
+            if debug:
+                click.secho(f"[DEBUG] Successfully updated Anki note {nid}", fg="green")
+            return True
+        except Exception as e:
+            if debug:
+                click.secho(f"[DEBUG] Error updating Anki: {e}", fg="red")
+            return False
+    else:
+        if debug:
+            click.secho(f"[DEBUG] Failed to synthesize audio for note {nid}", fg="red")
+    return False
+
 # --- CLI Command Group ---
 
 @click.group()
@@ -181,11 +253,9 @@ def init():
     config_path = Path.cwd() / DEFAULT_CONFIG_FILENAME
     if config_path.exists():
         if not click.confirm(f"'{DEFAULT_CONFIG_FILENAME}' already exists. Overwrite?"):
-            click.echo("Initialization aborted.")
             return
 
     click.secho("--- AnkiVox Configuration Setup ---", fg="cyan", bold=True)
-    
     key = click.prompt("Enter your Azure Speech Key", type=str)
     region = click.prompt("Enter your Azure Speech Region (e.g., eastus)", type=str)
     anki_url = click.prompt("Enter AnkiConnect URL", default="http://127.0.0.1:8765", type=str)
@@ -211,7 +281,6 @@ def init():
         "ANKI_CONNECT_URL": anki_url.strip(),
         "DEFAULT_VOICE": default_voice.strip()
     }
-
     with open(config_path, "w", encoding="utf-8") as f:
         yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
     
@@ -241,7 +310,7 @@ def sample(config, voice, locale, text, rate, pitch, out_dir, play):
     click.echo(f"Generating {len(voices)} samples...")
     for v_name in tqdm(voices):
         file_path = out_path / f"{v_name}.mp3"
-        tts.speech_config.speech_synthesis_voice_name = v_name
+        tts.voice = v_name
         content = wrap_ssml(text, v_name, rate=rate, pitch=pitch) if (rate != "1.0" or pitch != "0%") else text
         if tts.speak(content, file_path) and play and len(voices) == 1:
             play_audio(file_path)
@@ -256,24 +325,28 @@ def sample(config, voice, locale, text, rate, pitch, out_dir, play):
 @click.option("--rate", default="1.0", help="Speech rate")
 @click.option("--pitch", default="0%", help="Pitch adjustment")
 @click.option("--overwrite", is_flag=True, default=False, help="Overwrite existing audio")
+@click.option("--workers", "-w", default=1, type=int, help="Number of concurrent workers")
 @click.option("--yes", "-y", is_flag=True, default=False, help="Skip confirmation")
-def sync(config, query, source, target, fields, voice, rate, pitch, overwrite, yes):
-    """Sync Anki notes with multi-field mapping and SSML support."""
+@click.option("--ssml-source", is_flag=True, default=False, help="Source field is in SSML format")
+@click.option("--debug", is_flag=True, default=False, help="Enable debug mode")
+def sync(config, query, source, target, fields, voice, rate, pitch, overwrite, workers, yes, ssml_source, debug):
+    """Sync Anki notes with multi-threading and detailed stats."""
+    if debug:
+        click.secho("[DEBUG] Debug mode enabled", fg="blue")
     cfg = load_config(config)
     anki = AnkiClient(cfg.get("ANKI_CONNECT_URL"))
     
     field_map = parse_field_mapping(fields) if fields else {}
-    if source and target:
-        field_map[source] = target
+    if source and target: field_map[source] = target
     
     if not field_map:
-        click.secho("Error: Must provide --source/--target or --fields.", fg="red")
+        click.secho("Error: Must provide mapping.", fg="red")
         return
 
     tts_key, tts_region = cfg.get("AZURE_SPEECH_KEY"), cfg.get("AZURE_SPEECH_REGION")
     default_voice = voice or cfg.get("DEFAULT_VOICE")
     if not tts_key or not tts_region:
-        click.secho("Error: Missing Azure credentials. Run 'azv init' to set them up.", fg="red")
+        click.secho("Error: Missing credentials.", fg="red")
         return
 
     tts = AzureTTSManager(tts_key, tts_region, default_voice)
@@ -286,38 +359,44 @@ def sync(config, query, source, target, fields, voice, rate, pitch, overwrite, y
         notes_data = anki.invoke("notesInfo", notes=note_ids)
         
         tasks = []
+        total_chars = 0
         for note in notes_data:
             note_fields = note.get("fields", {})
             for src, tgt in field_map.items():
                 if src in note_fields and tgt in note_fields:
-                    val = note_fields.get(tgt, {}).get("value", "").strip()
-                    if val and not overwrite: continue
-                    txt = clean_html(note_fields.get(src, {}).get("value", ""))
-                    if txt: tasks.append((note["noteId"], src, tgt, txt))
+                    if note_fields.get(tgt, {}).get("value", "").strip() and not overwrite: continue
+                    raw_txt = note_fields.get(src, {}).get("value", "")
+                    txt = raw_txt if ssml_source else clean_html(raw_txt)
+                    if txt: 
+                        tasks.append((note["noteId"], src, tgt, txt))
+                        total_chars += len(txt)
 
         if not tasks:
             click.secho("No notes require sync.", fg="yellow")
             return
 
-        click.secho(f"Sync Preview: {len(tasks)} audio files to generate.", fg="cyan", bold=True)
-        if not yes and not click.confirm("Proceed?"): return
+        click.secho(f"\n--- Sync Statistics ---", fg="cyan", bold=True)
+        click.echo(f"Total Audio Files: {len(tasks)}")
+        click.echo(f"Total Characters:  {total_chars:,}")
+        click.echo(f"Concurrent Workers: {workers}")
+        click.echo(f"Voice:             {default_voice}")
+        
+        if not yes:
+            click.echo("")
+            if not click.confirm("Proceed?"): return
 
         temp_path.mkdir(exist_ok=True)
-        for nid, s_fld, t_fld, txt in tqdm(tasks, desc="Syncing"):
-            fname = f"azv_{s_fld}_{nid}.mp3"
-            l_file = temp_path / fname
-            if "<br" in txt or rate != "1.0" or pitch != "0%":
-                input_content = wrap_ssml(txt, default_voice, rate=rate, pitch=pitch)
-            else:
-                input_content = txt
-            
-            if tts.speak(input_content, l_file):
-                with open(l_file, "rb") as f:
-                    b64 = base64.b64encode(f.read()).decode("utf-8")
-                anki.invoke("storeMediaFile", filename=fname, data=b64)
-                anki.invoke("updateNoteFields", note={"id": nid, "fields": {t_fld: f"[sound:{fname}]"}})
-                time.sleep(0.05)
-        click.secho(f"Done! {len(tasks)} files synced.", fg="green")
+        if debug:
+            click.secho(f"[DEBUG] Starting sync with {len(tasks)} tasks", fg="blue")
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_task = {
+                executor.submit(process_single_task, task, tts, anki, temp_path, default_voice, rate, pitch, ssml_source, debug): task 
+                for task in tasks
+            }
+            for _ in tqdm(as_completed(future_to_task), total=len(tasks), desc="Syncing"):
+                pass
+                
+        click.secho(f"\nDone! {len(tasks)} files processed.", fg="green")
     finally:
         if temp_path.exists(): shutil.rmtree(temp_path)
 
