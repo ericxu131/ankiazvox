@@ -2,11 +2,16 @@
 
 **ankiazvox** is a professional-grade CLI tool that synchronizes Anki notes with high-quality Azure Neural TTS audio. By leveraging cloud-based Neural voices, it automates text extraction, sanitization, and card updates via AnkiConnect, transforming text-only decks into immersive audio-visual learning tools.
 
-## **✨ New in v0.5.0**
+## **✨ New in v0.6.0**
 
-* **azv init**: An interactive onboarding setup that walks you through connecting your Azure account and setting your preferred default voice.  
-* **Field Mapping**: Efficiency-focused syncing that processes multiple fields simultaneously via the \--fields flag (e.g., Word:Audio;Sent:SentAudio).  
-* **Prosody Control**: Fine-tune the listening experience with \--rate and \--pitch flags, allowing you to slow down complex phrases or adjust tone for clarity.  
+* **Concurrency / Performance**: Parallel synthesis with `--workers/-w` to speed up large sync jobs.
+* **Overwrite & Debug**: `--overwrite` replaces existing audio; `--debug` prints extra diagnostics for troubleshooting.
+
+## **📌 v0.5.0 Release Highlights**
+
+* **azv init**: An interactive onboarding setup that walks you through connecting your Azure account and setting your preferred default voice.
+* **Field Mapping**: Efficiency-focused syncing that processes multiple fields simultaneously via the `--fields` flag (e.g., `Word:Audio;Sent:SentAudio`).
+* **Prosody Control**: Fine-tune the listening experience with `--rate` and `--pitch` flags, allowing you to slow down complex phrases or adjust tone for clarity.
 * **SSML Support**: Enhanced processing that preserves natural phrasing by converting `<br>` to pauses and providing full support for raw SSML input fields.
 
 ## **🚀 Installation**
@@ -47,15 +52,19 @@ azv sync -q "deck:JP::Grammar" -f "Word:WordAud;Sent:SentAud" --rate 0.85 --pitc
 
 | Option | Short | Description |
 | :---- | :---- | :---- |
-| \--query | \-q | Anki search query (standard Anki search syntax) |
-| \--fields | \-f | Key-value mapping: source1:target1;source2:target2 |
-| \--source | \-s | Name of the field containing source text |
-| \--target | \-t | Name of the field to store the \[sound:...\] tag |
-| \--rate |  | Synthesis speed (1.0 is normal; 0.8 is 80% speed) |
-| \--pitch |  | Pitch adjustment (e.g., \+10% or \-5%) |
-| \--voice | \-v | Override the default neural voice for this session |
-| \--overwrite |  | If set, replaces existing audio in the target field |
-| \--yes | \-y | Skips the confirmation preview and starts immediately |
+| `--config` |  | Path to a config file (yaml or .env). The tool also auto-detects `azv_config.yml` or `.env` if present |
+| `--query` | `-q` | Anki search query (standard Anki search syntax) |
+| `--fields` | `-f` | Key-value mapping: `source1:target1;source2:target2` |
+| `--source` | `-s` | Name of the field containing source text |
+| `--target` | `-t` | Name of the field to store the `[sound:...]` tag |
+| `--rate` |  | Synthesis speed (1.0 is normal; 0.8 is 80% speed) |
+| `--pitch` |  | Pitch adjustment (e.g., `+10%` or `-5%`) |
+| `--voice` | `-v` | Override the default neural voice for this session |
+| `--overwrite` |  | Replace existing audio in the target field if present |
+| `--ssml-source` |  | Treat the source field as raw SSML when it begins with `<speak>` |
+| `--workers` | `-w` | Number of concurrent synthesis workers (default: 1) |
+| `--debug` |  | Enable debug logging for troubleshooting |
+| `--yes` | `-y` | Skip the confirmation prompt and proceed immediately |
 
 ### **2\. Sample & List Voices**
 
@@ -76,6 +85,12 @@ azv list-voices --locale ja-JP
 * **HTML Sanitization**: The tool cleans up Anki's internal HTML (like `<div>` and `<span>`) to ensure the TTS engine only reads the text.  
 * **Smart Pauses**: It preserves line breaks by converting `<br>` tags into 400ms SSML pauses, which helps in separating sentences or definitions.  
 * **Raw SSML**: For advanced users, if a field's content starts with the `<speak>` tag, **ankiazvox** treats it as raw SSML. This allows you to manually insert custom breaks, emphasis, or phoneme corrections directly into your Anki notes.
+
+Additional notes:
+
+* **Language detection from voice names**: When wrapping text into SSML the tool extracts the language code from typical voice names (e.g., `en-US-AndrewNeural`) so the TTS engine receives the correct `xml:lang` attribute.
+* **Cross-platform playback**: `azv sample --play` uses the system player (`afplay` on macOS, `ffplay` elsewhere) when available.
+* **Temporary files cleaned**: Temporary synthesis files are removed after sync to avoid cluttering your project folder.
 
 ## **🤝 Contributing**
 
