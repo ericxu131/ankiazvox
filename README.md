@@ -1,6 +1,8 @@
-# **ankiazvox**
+# **ankiazvox** (azv)
 
 **ankiazvox** is a professional-grade CLI tool that synchronizes Anki notes with high-quality Azure Neural TTS audio. By leveraging cloud-based Neural voices, it automates text extraction, sanitization, and card updates via AnkiConnect, transforming text-only decks into immersive audio-visual learning tools.
+
+**GitHub:** [github.com/ericxu131/ankiazvox](https://github.com/ericxu131/ankiazvox) · **Marketing site:** [apps.pisikeji.com/ankiazvox](https://apps.pisikeji.com/ankiazvox/) (source in `web/`).
 
 ## **✨ New in v0.6.0**
 

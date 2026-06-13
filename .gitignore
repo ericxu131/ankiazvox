@@ -5,3 +5,5 @@ azv_config.yaml
 dist
 __pycache__
 .vscode
+web/node_modules
+web/dist
