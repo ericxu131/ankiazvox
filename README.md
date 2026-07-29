@@ -4,7 +4,11 @@
 
 **GitHub:** [github.com/ericxu131/ankiazvox](https://github.com/ericxu131/ankiazvox) · **Marketing site:** [apps.pisikeji.com/ankiazvox](https://apps.pisikeji.com/ankiazvox/) (source in `web/`).
 
-## **✨ New in v0.6.0**
+## **✨ New in v0.7.0**
+
+* **`azv speak`**: Synthesize any text and play it aloud instantly through your Mac's speaker — no Anki required. Reads credentials from `~/azv_config.yaml` automatically, making it easy to call from AI agents or shell scripts.
+
+## **📌 v0.6.0 Highlights**
 
 * **Concurrency / Performance**: Parallel synthesis with `--workers/-w` to speed up large sync jobs.
 * **Overwrite & Debug**: `--overwrite` replaces existing audio; `--debug` prints extra diagnostics for troubleshooting.
@@ -68,7 +72,25 @@ azv sync -q "deck:JP::Grammar" -f "Word:WordAud;Sent:SentAud" --rate 0.85 --pitc
 | `--debug` |  | Enable debug logging for troubleshooting |
 | `--yes` | `-y` | Skip the confirmation prompt and proceed immediately |
 
-### **2\. Sample & List Voices**
+### **2\. Speak Aloud (speak)**
+
+Synthesize text and play it immediately through your system speaker. Reads credentials from `~/azv_config.yaml` by default — works from any directory.
+
+```bash
+azv speak "Hello, how are you today?"
+azv speak "The word ephemeral means lasting a very short time." --voice en-US-AndrewNeural
+azv speak "Good morning!" --rate 0.9 --pitch +5%
+```
+
+| Option | Short | Description |
+| :----- | :---- | :---------- |
+| `--config` | | Path to a config file (defaults to `~/azv_config.yaml`) |
+| `--voice` | `-v` | Override the default voice |
+| `--rate` | | Speech rate (e.g., `0.8`, `1.2`) |
+| `--pitch` | | Pitch adjustment (e.g., `+10%`, `-5%`) |
+| `--debug` | | Enable debug logging |
+
+### **3\. Sample & List Voices**
 
 Before running a large sync, it is recommended to sample voices to find the best fit for your language material.
 
