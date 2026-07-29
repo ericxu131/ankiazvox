@@ -104,6 +104,21 @@ class AzureTTSManager:
             return False
         return False
 
+    def speak_aloud(self, content: str, debug: bool = False) -> bool:
+        """Synthesize content to a temp file and play it via the system player."""
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+
+        try:
+            ok = self.speak(content, tmp_path, debug=debug)
+            if ok:
+                play_audio(tmp_path)
+            return ok
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
+
     def get_voice_list(self, locale: Optional[str] = None) -> List[Any]:
         """Fetch list of available voices from Azure."""
         config = self._get_config()
@@ -157,20 +172,37 @@ def clean_html(raw_html: str) -> str:
     return str(soup)
 
 def load_config(config_path: Optional[str] = None) -> Dict[str, str]:
-    """Load configuration from YAML or .env file."""
+    """Load configuration from YAML or .env file.
+    
+    Search order (first found wins):
+    1. Explicit --config path
+    2. ~/azv_config.yaml  (home directory)
+    3. ./azv_config.yaml  (current directory)
+    4. ./azv_config.yml / ./.env
+    """
     config = {
         "ANKI_CONNECT_URL": "http://127.0.0.1:8765",
         "AZURE_SPEECH_KEY": "",
         "AZURE_SPEECH_REGION": "",
         "DEFAULT_VOICE": ""
     }
-    target_path = Path(config_path) if config_path else Path.cwd() / DEFAULT_CONFIG_FILENAME
-    
-    if not target_path.exists() and not config_path:
-        for alt in ["azv_config.yml", ".env"]:
-            if (Path.cwd() / alt).exists():
-                target_path = Path.cwd() / alt
-                break
+
+    if config_path:
+        target_path = Path(config_path)
+    else:
+        home_config = Path.home() / DEFAULT_CONFIG_FILENAME
+        cwd_config = Path.cwd() / DEFAULT_CONFIG_FILENAME
+        if home_config.exists():
+            target_path = home_config
+        elif cwd_config.exists():
+            target_path = cwd_config
+        else:
+            target_path = cwd_config
+            for alt in ["azv_config.yml", ".env"]:
+                candidate = Path.cwd() / alt
+                if candidate.exists():
+                    target_path = candidate
+                    break
 
     if target_path.exists():
         if target_path.suffix.lower() in [".yaml", ".yml"]:
@@ -408,6 +440,51 @@ def list_voices(config, locale):
     cfg = load_config(config)
     tts = AzureTTSManager(cfg.get("AZURE_SPEECH_KEY"), cfg.get("AZURE_SPEECH_REGION"))
     tts.list_voices(locale)
+
+@cli.command()
+@click.argument("text")
+@click.option("--config", type=click.Path(exists=True), help="Path to config file (default: ~/azv_config.yaml)")
+@click.option("--voice", "-v", help="Azure voice name (overrides config)")
+@click.option("--rate", default="1.0", help="Speech rate (e.g., 0.8, 1.2)")
+@click.option("--pitch", default="0%", help="Pitch adjustment (e.g., +10%, -5%)")
+@click.option("--debug", is_flag=True, default=False, help="Enable debug output")
+def speak(text, config, voice, rate, pitch, debug):
+    """Synthesize TEXT and play it aloud through the default speaker.
+
+    Reads credentials from ~/azv_config.yaml by default.
+    Useful for AI agents or shell scripts that need spoken English output.
+
+    Example:
+
+        azv speak "Hello, this is a test."
+
+        azv speak "Good morning!" --voice en-US-AndrewNeural --rate 0.9
+    """
+    cfg = load_config(config)
+    key = cfg.get("AZURE_SPEECH_KEY")
+    region = cfg.get("AZURE_SPEECH_REGION")
+    if not key or not region:
+        click.secho(
+            "Error: Missing AZURE_SPEECH_KEY or AZURE_SPEECH_REGION. "
+            "Run 'azv init' or create ~/azv_config.yaml.",
+            fg="red",
+        )
+        raise SystemExit(1)
+
+    effective_voice = voice or cfg.get("DEFAULT_VOICE") or "en-US-AndrewNeural"
+    tts = AzureTTSManager(key, region, effective_voice)
+
+    needs_ssml = rate != "1.0" or pitch != "0%"
+    content = wrap_ssml(text, effective_voice, rate=rate, pitch=pitch) if needs_ssml else text
+
+    if debug:
+        click.secho(f"[DEBUG] Voice: {effective_voice}, rate: {rate}, pitch: {pitch}", fg="cyan")
+
+    ok = tts.speak_aloud(content, debug=debug)
+    if not ok:
+        click.secho("Error: Speech synthesis failed.", fg="red")
+        raise SystemExit(1)
+
 
 if __name__ == "__main__":
     cli()
